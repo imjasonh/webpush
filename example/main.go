@@ -10,7 +10,9 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -23,6 +25,9 @@ import (
 	"github.com/imjasonh/webpush/keys"
 	"github.com/imjasonh/webpush/storage"
 )
+
+//go:embed static/*
+var staticFiles embed.FS
 
 const (
 	keyPath   = "vapid-private.pem"
@@ -74,8 +79,11 @@ func main() {
 	go periodicPush()
 
 	// Set up HTTP handlers
-	http.HandleFunc("/", handleIndex)
-	http.HandleFunc("/sw.js", handleServiceWorker)
+	staticFS, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		log.Fatalf("Failed to create static file system: %v", err)
+	}
+	http.Handle("/", http.FileServer(http.FS(staticFS)))
 	http.HandleFunc("/api/vapid-public-key", handleVAPIDPublicKey)
 	http.HandleFunc("/api/subscribe", handleSubscribe)
 	http.HandleFunc("/api/unsubscribe", handleUnsubscribe)
@@ -152,20 +160,6 @@ func isGone(err error) bool {
 }
 
 // HTTP Handlers
-
-func handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(indexHTML))
-}
-
-func handleServiceWorker(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/javascript")
-	w.Write([]byte(serviceWorkerJS))
-}
 
 func handleVAPIDPublicKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -268,229 +262,3 @@ func handlePing(w http.ResponseWriter, r *http.Request) {
 		"message": "Push notification queued",
 	})
 }
-
-// Static content
-
-const indexHTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web Push Demo</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 600px;
-            margin: 50px auto;
-            padding: 20px;
-            background: #f5f5f5;
-        }
-        .card {
-            background: white;
-            border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
-        }
-        h1 { color: #333; }
-        button {
-            background: #007bff;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-            margin: 5px;
-        }
-        button:hover { background: #0056b3; }
-        button:disabled { background: #ccc; cursor: not-allowed; }
-        button.danger { background: #dc3545; }
-        button.danger:hover { background: #c82333; }
-        button.success { background: #28a745; }
-        #status {
-            padding: 10px;
-            border-radius: 4px;
-            margin-top: 10px;
-        }
-        .success { background: #d4edda; color: #155724; }
-        .error { background: #f8d7da; color: #721c24; }
-        .info { background: #cce5ff; color: #004085; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>🔔 Web Push Demo</h1>
-        <p>Subscribe to receive push notifications from this server.</p>
-        <p>Notifications are sent:</p>
-        <ul>
-            <li>Every minute automatically</li>
-            <li>When someone visits <a href="/ping">/ping</a></li>
-        </ul>
-    </div>
-
-    <div class="card">
-        <h2>Subscription</h2>
-        <button id="subscribeBtn" onclick="subscribe()">Subscribe to Notifications</button>
-        <button id="unsubscribeBtn" onclick="unsubscribe()" class="danger" disabled>Unsubscribe</button>
-        <div id="status"></div>
-    </div>
-
-    <div class="card">
-        <h2>Test Push</h2>
-        <button onclick="sendPing()" class="success">Send Ping to All Subscribers</button>
-    </div>
-
-    <script>
-        let vapidPublicKey = '';
-        let currentSubscription = null;
-
-        // Convert base64 to Uint8Array
-        function urlBase64ToUint8Array(base64String) {
-            const padding = '='.repeat((4 - base64String.length % 4) % 4);
-            const base64 = (base64String + padding)
-                .replace(/-/g, '+')
-                .replace(/_/g, '/');
-            const rawData = window.atob(base64);
-            const outputArray = new Uint8Array(rawData.length);
-            for (let i = 0; i < rawData.length; ++i) {
-                outputArray[i] = rawData.charCodeAt(i);
-            }
-            return outputArray;
-        }
-
-        function setStatus(message, type) {
-            const status = document.getElementById('status');
-            status.textContent = message;
-            status.className = type;
-        }
-
-        async function init() {
-            // Get VAPID public key
-            const resp = await fetch('/api/vapid-public-key');
-            const data = await resp.json();
-            vapidPublicKey = data.publicKey;
-
-            // Check if already subscribed
-            if ('serviceWorker' in navigator && 'PushManager' in window) {
-                const registration = await navigator.serviceWorker.register('/sw.js');
-                const subscription = await registration.pushManager.getSubscription();
-                if (subscription) {
-                    currentSubscription = subscription;
-                    document.getElementById('subscribeBtn').disabled = true;
-                    document.getElementById('unsubscribeBtn').disabled = false;
-                    setStatus('You are subscribed to notifications', 'success');
-                }
-            } else {
-                setStatus('Push notifications not supported in this browser', 'error');
-                document.getElementById('subscribeBtn').disabled = true;
-            }
-        }
-
-        async function subscribe() {
-            try {
-                const permission = await Notification.requestPermission();
-                if (permission !== 'granted') {
-                    setStatus('Notification permission denied', 'error');
-                    return;
-                }
-
-                const registration = await navigator.serviceWorker.ready;
-                const subscription = await registration.pushManager.subscribe({
-                    userVisibleOnly: true,
-                    applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
-                });
-
-                // Send to server
-                const resp = await fetch('/api/subscribe', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(subscription.toJSON())
-                });
-
-                if (resp.ok) {
-                    currentSubscription = subscription;
-                    document.getElementById('subscribeBtn').disabled = true;
-                    document.getElementById('unsubscribeBtn').disabled = false;
-                    setStatus('Successfully subscribed!', 'success');
-                } else {
-                    setStatus('Failed to subscribe: ' + await resp.text(), 'error');
-                }
-            } catch (err) {
-                setStatus('Error: ' + err.message, 'error');
-            }
-        }
-
-        async function unsubscribe() {
-            try {
-                if (currentSubscription) {
-                    await fetch('/api/unsubscribe', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ endpoint: currentSubscription.endpoint })
-                    });
-                    await currentSubscription.unsubscribe();
-                    currentSubscription = null;
-                }
-                document.getElementById('subscribeBtn').disabled = false;
-                document.getElementById('unsubscribeBtn').disabled = true;
-                setStatus('Successfully unsubscribed', 'info');
-            } catch (err) {
-                setStatus('Error: ' + err.message, 'error');
-            }
-        }
-
-        async function sendPing() {
-            try {
-                const resp = await fetch('/ping');
-                if (resp.ok) {
-                    setStatus('Ping sent to all subscribers!', 'success');
-                } else {
-                    setStatus('Failed to send ping', 'error');
-                }
-            } catch (err) {
-                setStatus('Error: ' + err.message, 'error');
-            }
-        }
-
-        init();
-    </script>
-</body>
-</html>
-`
-
-const serviceWorkerJS = `
-self.addEventListener('push', function(event) {
-    let data = { title: 'Notification', body: '' };
-    
-    if (event.data) {
-        try {
-            data = event.data.json();
-        } catch (e) {
-            data.body = event.data.text();
-        }
-    }
-
-    const options = {
-        body: data.body || '',
-        icon: data.icon || '',
-        badge: data.badge || '',
-        data: data.data || {},
-        requireInteraction: false
-    };
-
-    event.waitUntil(
-        self.registration.showNotification(data.title || 'Notification', options)
-    );
-});
-
-self.addEventListener('notificationclick', function(event) {
-    event.notification.close();
-    
-    if (event.notification.data && event.notification.data.url) {
-        event.waitUntil(
-            clients.openWindow(event.notification.data.url)
-        );
-    }
-});
-`
