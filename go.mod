@@ -4,6 +4,7 @@ go 1.24.10
 
 require (
 	cloud.google.com/go/kms v1.23.2
+	github.com/google/uuid v1.6.0
 	github.com/mattn/go-sqlite3 v1.14.32
 	golang.org/x/crypto v0.45.0
 )
