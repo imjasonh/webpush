@@ -1,0 +1,8 @@
+# Generated VAPID keys
+vapid-private.pem
+
+# SQLite database
+subscriptions.db
+subscriptions.db-journal
+subscriptions.db-wal
+subscriptions.db-shm
