@@ -11,27 +11,29 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/chainguard-dev/clog"
+	_ "github.com/chainguard-dev/clog/gcp/init"
 	"github.com/google/uuid"
 	"github.com/imjasonh/webpush"
 	"github.com/imjasonh/webpush/keys"
 	"github.com/imjasonh/webpush/storage"
+	"github.com/sethvargo/go-envconfig"
 )
 
 //go:embed static/*
 var staticFiles embed.FS
 
 const (
-	keyPath   = "vapid-private.pem"
-	dbPath    = "subscriptions.db"
+	keyPath   = "/tmp/vapid-private.pem"
+	dbPath    = "/tmp/subscriptions.db"
 	subject   = "mailto:admin@example.com"
 	serverURL = "http://localhost:8080"
 )
@@ -39,38 +41,46 @@ const (
 var (
 	store  storage.Storage
 	client *webpush.Client
-	signer *keys.FileSigner
-	mu     sync.RWMutex
+	signer webpush.Signer
 )
 
+var env = envconfig.MustProcess(context.Background(), &struct {
+	KMSKeyName string `env:"KMS_KEY_NAME" default:""`
+}{})
+
 func main() {
+	ctx := context.Background()
 	var err error
 
 	// Initialize or load VAPID keys
-	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-		log.Println("Generating new VAPID keys...")
+	if env.KMSKeyName != "" {
+		clog.Infof("Using KMS for VAPID keys: %s", env.KMSKeyName)
+		signer, err = keys.NewKMSSigner(ctx, env.KMSKeyName)
+		if err != nil {
+			clog.Fatalf("Failed to initialize KMS signer: %v", err)
+		}
+	} else if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+		clog.Info("Generating new VAPID keys...")
 		signer, err = keys.GenerateKey(keyPath)
 		if err != nil {
-			log.Fatalf("Failed to generate keys: %v", err)
+			clog.Fatalf("Failed to generate keys: %v", err)
 		}
-		log.Println("VAPID keys generated and saved to", keyPath)
+		clog.Info("VAPID keys generated and saved to", keyPath)
 	} else {
 		signer, err = keys.NewFileSigner(keyPath)
 		if err != nil {
-			log.Fatalf("Failed to load keys: %v", err)
+			clog.Fatalf("Failed to load keys: %v", err)
 		}
-		log.Println("VAPID keys loaded from", keyPath)
+		clog.Info("VAPID keys loaded from", keyPath)
 	}
-
-	log.Println("VAPID Public Key:", signer.PublicKeyBase64())
 
 	// Initialize SQLite storage
 	store, err = storage.NewSQLite(dbPath)
 	if err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
+		clog.Fatalf("Failed to initialize storage: %v", err)
 	}
 	defer store.Close()
-	log.Println("SQLite storage initialized at", dbPath)
+	clog.Info("SQLite storage initialized at", dbPath)
 
 	// Create web push client
 	client = webpush.NewClient(signer, subject)
@@ -81,7 +91,7 @@ func main() {
 	// Set up HTTP handlers
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
-		log.Fatalf("Failed to create static file system: %v", err)
+		clog.Fatalf("Failed to create static file system: %v", err)
 	}
 	http.Handle("/", http.FileServer(http.FS(staticFS)))
 	http.HandleFunc("/api/vapid-public-key", handleVAPIDPublicKey)
@@ -89,10 +99,10 @@ func main() {
 	http.HandleFunc("/api/unsubscribe", handleUnsubscribe)
 	http.HandleFunc("/ping", handlePing)
 
-	log.Printf("Server starting at %s", serverURL)
-	log.Printf("Visit %s to subscribe to push notifications", serverURL)
+	clog.Infof("Server starting at %s", serverURL)
+	clog.Infof("Visit %s to subscribe to push notifications", serverURL)
 	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatalf("Server failed: %v", err)
+		clog.Fatalf("Server failed: %v", err)
 	}
 }
 
@@ -112,12 +122,12 @@ func sendToAll(title, body string) {
 
 	records, err := store.List(ctx, 1000, 0)
 	if err != nil {
-		log.Printf("Failed to list subscriptions: %v", err)
+		clog.Infof("Failed to list subscriptions: %v", err)
 		return
 	}
 
 	if len(records) == 0 {
-		log.Println("No subscribers to notify")
+		clog.Info("No subscribers to notify")
 		return
 	}
 
@@ -126,7 +136,7 @@ func sendToAll(title, body string) {
 		"body":  body,
 	})
 	if err != nil {
-		log.Printf("Failed to marshal payload: %v", err)
+		clog.Infof("Failed to marshal payload: %v", err)
 		return
 	}
 
@@ -137,14 +147,14 @@ func sendToAll(title, body string) {
 			Urgency: "normal",
 		})
 		if err != nil {
-			log.Printf("Failed to send to %s: %v", record.ID, err)
+			clog.Infof("Failed to send to %s: %v", record.ID, err)
 			failed++
 			// Clean up expired/invalid subscriptions (410 Gone)
 			if isGone(err) {
 				if delErr := store.Delete(ctx, record.ID); delErr != nil {
-					log.Printf("Failed to delete expired subscription: %v", delErr)
+					clog.Infof("Failed to delete expired subscription: %v", delErr)
 				} else {
-					log.Printf("Deleted expired subscription: %s", record.ID)
+					clog.Infof("Deleted expired subscription: %s", record.ID)
 				}
 			}
 		} else {
@@ -152,7 +162,7 @@ func sendToAll(title, body string) {
 		}
 	}
 
-	log.Printf("Push sent: %d successful, %d failed", sent, failed)
+	clog.Infof("Push sent: %d successful, %d failed", sent, failed)
 }
 
 func isGone(err error) bool {
@@ -164,7 +174,7 @@ func isGone(err error) bool {
 func handleVAPIDPublicKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"publicKey": signer.PublicKeyBase64(),
+		"publicKey": base64.RawURLEncoding.EncodeToString(signer.PublicKey()),
 	})
 }
 
@@ -209,7 +219,7 @@ func handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("New subscription: %s", record.ID)
+	clog.Infof("New subscription: %s", record.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -237,7 +247,7 @@ func handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Unsubscribed: %s", req.Endpoint)
+	clog.Infof("Unsubscribed: %s", req.Endpoint)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{

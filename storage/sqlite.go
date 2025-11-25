@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/imjasonh/webpush"
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
+	_ "modernc.org/sqlite" // SQLite driver
 )
 
 // SQLite implements storage using SQLite.
@@ -18,7 +18,7 @@ type SQLite struct {
 // NewSQLite creates a new SQLite storage.
 // dsn is the data source name, e.g., "webpush.db" or ":memory:".
 func NewSQLite(dsn string) (*SQLite, error) {
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
