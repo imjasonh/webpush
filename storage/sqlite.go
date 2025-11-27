@@ -31,11 +31,13 @@ func NewSQLite(dsn string) (*SQLite, error) {
 			endpoint TEXT NOT NULL UNIQUE,
 			p256dh TEXT NOT NULL,
 			auth TEXT NOT NULL,
+			vapid_key TEXT,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_user_id ON subscriptions(user_id);
 		CREATE INDEX IF NOT EXISTS idx_endpoint ON subscriptions(endpoint);
+		CREATE INDEX IF NOT EXISTS idx_vapid_key ON subscriptions(vapid_key);
 	`)
 	if err != nil {
 		db.Close()
@@ -54,13 +56,14 @@ func (s *SQLite) Save(ctx context.Context, record *Record) error {
 	record.UpdatedAt = now
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO subscriptions (id, user_id, endpoint, p256dh, auth, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO subscriptions (id, user_id, endpoint, p256dh, auth, vapid_key, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			user_id = excluded.user_id,
 			endpoint = excluded.endpoint,
 			p256dh = excluded.p256dh,
 			auth = excluded.auth,
+			vapid_key = excluded.vapid_key,
 			updated_at = excluded.updated_at
 	`,
 		record.ID,
@@ -68,6 +71,7 @@ func (s *SQLite) Save(ctx context.Context, record *Record) error {
 		record.Subscription.Endpoint,
 		record.Subscription.Keys.P256dh,
 		record.Subscription.Keys.Auth,
+		record.VAPIDKey,
 		record.CreatedAt,
 		record.UpdatedAt,
 	)
@@ -80,7 +84,7 @@ func (s *SQLite) Save(ctx context.Context, record *Record) error {
 // Get retrieves a subscription by ID.
 func (s *SQLite) Get(ctx context.Context, id string) (*Record, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, endpoint, p256dh, auth, created_at, updated_at
+		SELECT id, user_id, endpoint, p256dh, auth, vapid_key, created_at, updated_at
 		FROM subscriptions WHERE id = ?
 	`, id)
 	return scanRecord(row)
@@ -89,7 +93,7 @@ func (s *SQLite) Get(ctx context.Context, id string) (*Record, error) {
 // GetByEndpoint retrieves a subscription by its endpoint URL.
 func (s *SQLite) GetByEndpoint(ctx context.Context, endpoint string) (*Record, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, endpoint, p256dh, auth, created_at, updated_at
+		SELECT id, user_id, endpoint, p256dh, auth, vapid_key, created_at, updated_at
 		FROM subscriptions WHERE endpoint = ?
 	`, endpoint)
 	return scanRecord(row)
@@ -98,9 +102,22 @@ func (s *SQLite) GetByEndpoint(ctx context.Context, endpoint string) (*Record, e
 // GetByUserID retrieves all subscriptions for a user.
 func (s *SQLite) GetByUserID(ctx context.Context, userID string) ([]*Record, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, user_id, endpoint, p256dh, auth, created_at, updated_at
+		SELECT id, user_id, endpoint, p256dh, auth, vapid_key, created_at, updated_at
 		FROM subscriptions WHERE user_id = ?
 	`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("querying subscriptions: %w", err)
+	}
+	defer rows.Close()
+	return scanRecords(rows)
+}
+
+// GetByVAPIDKey retrieves all subscriptions for a specific VAPID key.
+func (s *SQLite) GetByVAPIDKey(ctx context.Context, vapidKey string) ([]*Record, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, user_id, endpoint, p256dh, auth, vapid_key, created_at, updated_at
+		FROM subscriptions WHERE vapid_key = ?
+	`, vapidKey)
 	if err != nil {
 		return nil, fmt.Errorf("querying subscriptions: %w", err)
 	}
@@ -143,7 +160,7 @@ func (s *SQLite) DeleteByEndpoint(ctx context.Context, endpoint string) error {
 // List returns all subscriptions with pagination.
 func (s *SQLite) List(ctx context.Context, limit, offset int) ([]*Record, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, user_id, endpoint, p256dh, auth, created_at, updated_at
+		SELECT id, user_id, endpoint, p256dh, auth, vapid_key, created_at, updated_at
 		FROM subscriptions
 		ORDER BY created_at DESC
 		LIMIT ? OFFSET ?
@@ -171,10 +188,11 @@ func scanRecord(row scanner) (*Record, error) {
 		endpoint  string
 		p256dh    string
 		auth      string
+		vapidKey  sql.NullString
 		createdAt time.Time
 		updatedAt time.Time
 	)
-	err := row.Scan(&id, &userID, &endpoint, &p256dh, &auth, &createdAt, &updatedAt)
+	err := row.Scan(&id, &userID, &endpoint, &p256dh, &auth, &vapidKey, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -186,6 +204,7 @@ func scanRecord(row scanner) (*Record, error) {
 		UserID:    userID.String,
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
+		VAPIDKey:  vapidKey.String,
 		Subscription: &webpush.Subscription{
 			Endpoint: endpoint,
 			Keys: webpush.Keys{
