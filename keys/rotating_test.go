@@ -1,6 +1,7 @@
 package keys
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"testing"
@@ -64,7 +65,7 @@ func TestRotatingSigner_PublicKey(t *testing.T) {
 	}
 
 	// Verify it matches the signer's key
-	if !bytesEqual(pubKey, signer.PublicKey()) {
+	if !bytes.Equal(pubKey, signer.PublicKey()) {
 		t.Error("PublicKey() doesn't match signer's public key")
 	}
 }
@@ -79,7 +80,7 @@ func TestRotatingSigner_PublicKeyBase64(t *testing.T) {
 		t.Fatalf("PublicKeyBase64() returned invalid base64: %v", err)
 	}
 
-	if !bytesEqual(decoded, signer.PublicKey()) {
+	if !bytes.Equal(decoded, signer.PublicKey()) {
 		t.Error("PublicKeyBase64() decoded doesn't match signer's public key")
 	}
 }
@@ -111,7 +112,7 @@ func TestRotatingSigner_Rotate(t *testing.T) {
 	if len(prevKeys) != 1 {
 		t.Errorf("PreviousKeys() count = %d, want 1", len(prevKeys))
 	}
-	if !bytesEqual(prevKeys[0], key1.PublicKey()) {
+	if !bytes.Equal(prevKeys[0], key1.PublicKey()) {
 		t.Error("First previous key doesn't match key1")
 	}
 
@@ -131,10 +132,10 @@ func TestRotatingSigner_Rotate(t *testing.T) {
 	if len(prevKeys) != 2 {
 		t.Errorf("PreviousKeys() count = %d, want 2", len(prevKeys))
 	}
-	if !bytesEqual(prevKeys[0], key2.PublicKey()) {
+	if !bytes.Equal(prevKeys[0], key2.PublicKey()) {
 		t.Error("First previous key doesn't match key2")
 	}
-	if !bytesEqual(prevKeys[1], key1.PublicKey()) {
+	if !bytes.Equal(prevKeys[1], key1.PublicKey()) {
 		t.Error("Second previous key doesn't match key1")
 	}
 }
@@ -154,13 +155,13 @@ func TestRotatingSigner_AllKeys(t *testing.T) {
 	}
 
 	// Current key first
-	if !bytesEqual(allKeys[0], key3.PublicKey()) {
+	if !bytes.Equal(allKeys[0], key3.PublicKey()) {
 		t.Error("First key should be key3 (current)")
 	}
-	if !bytesEqual(allKeys[1], key2.PublicKey()) {
+	if !bytes.Equal(allKeys[1], key2.PublicKey()) {
 		t.Error("Second key should be key2")
 	}
-	if !bytesEqual(allKeys[2], key1.PublicKey()) {
+	if !bytes.Equal(allKeys[2], key1.PublicKey()) {
 		t.Error("Third key should be key1")
 	}
 }
@@ -308,7 +309,7 @@ func TestRotatingSigner_GetSignerForKey(t *testing.T) {
 	if signer == nil {
 		t.Fatal("GetSignerForKey() returned nil for current key")
 	}
-	if !bytesEqual(signer.PublicKey(), key2.PublicKey()) {
+	if !bytes.Equal(signer.PublicKey(), key2.PublicKey()) {
 		t.Error("GetSignerForKey() returned wrong signer for current key")
 	}
 
@@ -317,7 +318,7 @@ func TestRotatingSigner_GetSignerForKey(t *testing.T) {
 	if signer == nil {
 		t.Fatal("GetSignerForKey() returned nil for previous key")
 	}
-	if !bytesEqual(signer.PublicKey(), key1.PublicKey()) {
+	if !bytes.Equal(signer.PublicKey(), key1.PublicKey()) {
 		t.Error("GetSignerForKey() returned wrong signer for previous key")
 	}
 
@@ -361,7 +362,7 @@ func TestRotatingSigner_PreviousKeysBase64(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PreviousKeysBase64()[0] is not valid base64: %v", err)
 	}
-	if !bytesEqual(decoded, key1.PublicKey()) {
+	if !bytes.Equal(decoded, key1.PublicKey()) {
 		t.Error("PreviousKeysBase64()[0] doesn't match key1")
 	}
 }

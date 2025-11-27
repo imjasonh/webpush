@@ -2,6 +2,7 @@
 package keys
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -152,7 +153,7 @@ func (r *RotatingSigner) KeyCount() int {
 func (r *RotatingSigner) IsCurrentKey(publicKey []byte) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return bytesEqual(r.current.PublicKey(), publicKey)
+	return bytes.Equal(r.current.PublicKey(), publicKey)
 }
 
 // IsCurrentKeyBase64 checks if the given base64-encoded public key matches the current key.
@@ -169,11 +170,11 @@ func (r *RotatingSigner) IsKnownKey(publicKey []byte) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if bytesEqual(r.current.PublicKey(), publicKey) {
+	if bytes.Equal(r.current.PublicKey(), publicKey) {
 		return true
 	}
 	for _, signer := range r.previous {
-		if bytesEqual(signer.PublicKey(), publicKey) {
+		if bytes.Equal(signer.PublicKey(), publicKey) {
 			return true
 		}
 	}
@@ -196,11 +197,11 @@ func (r *RotatingSigner) GetSignerForKey(publicKey []byte) Signer {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	if bytesEqual(r.current.PublicKey(), publicKey) {
+	if bytes.Equal(r.current.PublicKey(), publicKey) {
 		return r.current
 	}
 	for _, signer := range r.previous {
-		if bytesEqual(signer.PublicKey(), publicKey) {
+		if bytes.Equal(signer.PublicKey(), publicKey) {
 			return signer
 		}
 	}
@@ -214,17 +215,4 @@ func (r *RotatingSigner) GetSignerForKeyBase64(publicKeyB64 string) Signer {
 		return nil
 	}
 	return r.GetSignerForKey(decoded)
-}
-
-// bytesEqual compares two byte slices for equality.
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
