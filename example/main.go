@@ -173,8 +173,12 @@ func isGone(err error) bool {
 
 func handleVAPIDPublicKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	publicKeyB64 := base64.RawURLEncoding.EncodeToString(signer.PublicKey())
 	json.NewEncoder(w).Encode(map[string]string{
-		"publicKey": base64.RawURLEncoding.EncodeToString(signer.PublicKey()),
+		"publicKey": publicKeyB64,
+		// Include a truncated key ID that clients can use to detect key rotation
+		// When this changes, clients know they need to resubscribe
+		"keyId": publicKeyB64[:16],
 	})
 }
 

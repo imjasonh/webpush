@@ -39,3 +39,20 @@ self.addEventListener('notificationclick', function(event) {
         );
     }
 });
+
+// Handle subscription change events (triggered when VAPID key changes)
+self.addEventListener('pushsubscriptionchange', function(event) {
+    console.log('Push subscription changed:', event);
+    
+    // Notify all clients that they need to resubscribe
+    event.waitUntil(
+        self.clients.matchAll({ type: 'window' }).then(function(clients) {
+            clients.forEach(function(client) {
+                client.postMessage({
+                    type: 'SUBSCRIPTION_CHANGED',
+                    message: 'Push subscription has changed. Please resubscribe.'
+                });
+            });
+        })
+    );
+});

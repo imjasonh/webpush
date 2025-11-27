@@ -35,6 +35,8 @@
         button.danger { background: #dc3545; }
         button.danger:hover { background: #c82333; }
         button.success { background: #28a745; }
+        button.warning { background: #ffc107; color: #212529; }
+        button.warning:hover { background: #e0a800; }
         #status {
             padding: 10px;
             border-radius: 4px;
@@ -43,6 +45,12 @@
         .success { background: #d4edda; color: #155724; }
         .error { background: #f8d7da; color: #721c24; }
         .info { background: #cce5ff; color: #004085; }
+        .warning { background: #fff3cd; color: #856404; }
+        #keyInfo {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
@@ -60,7 +68,9 @@
         <h2>Subscription</h2>
         <button id="subscribeBtn" onclick="subscribe()">Subscribe to Notifications</button>
         <button id="unsubscribeBtn" onclick="unsubscribe()" class="danger" disabled>Unsubscribe</button>
+        <button id="resubscribeBtn" onclick="resubscribe()" class="warning" style="display:none">Resubscribe (Key Changed)</button>
         <div id="status"></div>
+        <div id="keyInfo"></div>
     </div>
 
     <div class="card">
@@ -68,9 +78,20 @@
         <button onclick="sendPing()" class="success">Send Ping to All Subscribers</button>
     </div>
 
+    <div class="card">
+        <h2>Key Rotation</h2>
+        <p>When the server's VAPID key changes, existing subscriptions become invalid. 
+           The client will detect this and prompt you to resubscribe.</p>
+        <button onclick="checkKeyRotation()">Check for Key Changes</button>
+    </div>
+
     <script>
         let vapidPublicKey = '';
+        let currentKeyId = '';
         let currentSubscription = null;
+
+        // Store the key ID in localStorage to detect changes
+        const STORED_KEY_ID = 'vapid_key_id';
 
         // Convert base64 to Uint8Array
         function urlBase64ToUint8Array(base64String) {
@@ -92,25 +113,77 @@
             status.className = type;
         }
 
-        async function init() {
-            // Get VAPID public key
+        function updateKeyInfo() {
+            const keyInfo = document.getElementById('keyInfo');
+            const storedKeyId = localStorage.getItem(STORED_KEY_ID);
+            keyInfo.textContent = `Current server key ID: ${currentKeyId} | Your subscription key ID: ${storedKeyId || 'none'}`;
+        }
+
+        async function fetchVAPIDKey() {
             const resp = await fetch('/api/vapid-public-key');
             const data = await resp.json();
             vapidPublicKey = data.publicKey;
+            currentKeyId = data.keyId;
+            return data;
+        }
+
+        async function init() {
+            // Get VAPID public key
+            await fetchVAPIDKey();
+            updateKeyInfo();
 
             // Check if already subscribed
             if ('serviceWorker' in navigator && 'PushManager' in window) {
                 const registration = await navigator.serviceWorker.register('/sw.js');
                 const subscription = await registration.pushManager.getSubscription();
+                
                 if (subscription) {
                     currentSubscription = subscription;
-                    document.getElementById('subscribeBtn').disabled = true;
-                    document.getElementById('unsubscribeBtn').disabled = false;
-                    setStatus('You are subscribed to notifications', 'success');
+                    const storedKeyId = localStorage.getItem(STORED_KEY_ID);
+                    
+                    // Check if the key has changed since subscription
+                    if (storedKeyId && storedKeyId !== currentKeyId) {
+                        // Key has rotated - subscription is now invalid
+                        document.getElementById('subscribeBtn').disabled = true;
+                        document.getElementById('unsubscribeBtn').disabled = false;
+                        document.getElementById('resubscribeBtn').style.display = 'inline-block';
+                        setStatus('⚠️ Server key has changed! Your subscription is invalid. Please resubscribe.', 'warning');
+                    } else {
+                        document.getElementById('subscribeBtn').disabled = true;
+                        document.getElementById('unsubscribeBtn').disabled = false;
+                        setStatus('You are subscribed to notifications', 'success');
+                    }
+                } else {
+                    // No current subscription - clear stored key ID
+                    localStorage.removeItem(STORED_KEY_ID);
                 }
             } else {
                 setStatus('Push notifications not supported in this browser', 'error');
                 document.getElementById('subscribeBtn').disabled = true;
+            }
+
+            // Periodically check for key rotation (every 5 minutes)
+            setInterval(checkKeyRotation, 5 * 60 * 1000);
+        }
+
+        async function checkKeyRotation() {
+            try {
+                const prevKeyId = currentKeyId;
+                await fetchVAPIDKey();
+                updateKeyInfo();
+
+                const storedKeyId = localStorage.getItem(STORED_KEY_ID);
+                
+                if (currentSubscription && storedKeyId && storedKeyId !== currentKeyId) {
+                    document.getElementById('resubscribeBtn').style.display = 'inline-block';
+                    setStatus('⚠️ Server key has changed! Your subscription is invalid. Please resubscribe.', 'warning');
+                } else if (prevKeyId !== currentKeyId) {
+                    setStatus('Server key has changed.', 'info');
+                } else {
+                    setStatus('Key check complete - no changes detected.', 'info');
+                }
+            } catch (err) {
+                setStatus('Failed to check key: ' + err.message, 'error');
             }
         }
 
@@ -121,6 +194,9 @@
                     setStatus('Notification permission denied', 'error');
                     return;
                 }
+
+                // Fetch latest VAPID key
+                await fetchVAPIDKey();
 
                 const registration = await navigator.serviceWorker.ready;
                 const subscription = await registration.pushManager.subscribe({
@@ -137,8 +213,12 @@
 
                 if (resp.ok) {
                     currentSubscription = subscription;
+                    // Store the key ID used for this subscription
+                    localStorage.setItem(STORED_KEY_ID, currentKeyId);
                     document.getElementById('subscribeBtn').disabled = true;
                     document.getElementById('unsubscribeBtn').disabled = false;
+                    document.getElementById('resubscribeBtn').style.display = 'none';
+                    updateKeyInfo();
                     setStatus('Successfully subscribed!', 'success');
                 } else {
                     setStatus('Failed to subscribe: ' + await resp.text(), 'error');
@@ -159,11 +239,52 @@
                     await currentSubscription.unsubscribe();
                     currentSubscription = null;
                 }
+                // Clear stored key ID
+                localStorage.removeItem(STORED_KEY_ID);
                 document.getElementById('subscribeBtn').disabled = false;
                 document.getElementById('unsubscribeBtn').disabled = true;
+                document.getElementById('resubscribeBtn').style.display = 'none';
+                updateKeyInfo();
                 setStatus('Successfully unsubscribed', 'info');
             } catch (err) {
                 setStatus('Error: ' + err.message, 'error');
+            }
+        }
+
+        // Resubscribe after key rotation
+        async function resubscribe() {
+            try {
+                setStatus('Resubscribing with new key...', 'info');
+                
+                // First unsubscribe the old subscription
+                if (currentSubscription) {
+                    try {
+                        await currentSubscription.unsubscribe();
+                    } catch (e) {
+                        console.log('Old subscription already invalid:', e);
+                    }
+                    
+                    // Notify server to remove old subscription
+                    try {
+                        await fetch('/api/unsubscribe', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ endpoint: currentSubscription.endpoint })
+                        });
+                    } catch (e) {
+                        console.log('Failed to notify server of unsubscribe:', e);
+                    }
+                    
+                    currentSubscription = null;
+                }
+                
+                // Clear old key ID
+                localStorage.removeItem(STORED_KEY_ID);
+                
+                // Subscribe with new key
+                await subscribe();
+            } catch (err) {
+                setStatus('Resubscription failed: ' + err.message, 'error');
             }
         }
 
@@ -178,6 +299,17 @@
             } catch (err) {
                 setStatus('Error: ' + err.message, 'error');
             }
+        }
+
+        // Listen for messages from service worker about subscription changes
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.addEventListener('message', function(event) {
+                if (event.data && event.data.type === 'SUBSCRIPTION_CHANGED') {
+                    console.log('Received subscription change notification from SW');
+                    document.getElementById('resubscribeBtn').style.display = 'inline-block';
+                    setStatus('⚠️ ' + event.data.message, 'warning');
+                }
+            });
         }
 
         init();
