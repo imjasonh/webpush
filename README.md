@@ -141,8 +141,11 @@ signer, err := keys.NewKMSSigner(ctx, "projects/.../cryptoKeyVersions/1")
 signer, err := keys.GenerateKey("path/to/save.pem")
 privateB64, publicB64, err := keys.GenerateKeyPair()
 
-// Rotating signer for key rotation
+// Rotating signer for key rotation (file-based or any Signer)
 rotating := keys.NewRotatingSigner(currentSigner)
+
+// Rotating KMS signer for key rotation (KMS-backed)
+rotatingKMS, err := keys.NewRotatingKMSSigner(ctx, "projects/.../cryptoKeyVersions/1")
 ```
 
 ### Storage
@@ -159,7 +162,8 @@ store.Save(ctx, record)
 store.Get(ctx, id)
 store.GetByEndpoint(ctx, endpoint)
 store.GetByUserID(ctx, userID)
-store.GetByVAPIDKey(ctx, vapidKeyB64)  // Get subscriptions for a specific VAPID key
+store.GetByVAPIDKey(ctx, vapidKeyB64)   // Get subscriptions for a specific VAPID key
+store.CountByVAPIDKey(ctx, vapidKeyB64) // Count subscriptions for a specific VAPID key
 store.List(ctx, limit, offset)
 store.Delete(ctx, id)
 store.DeleteByEndpoint(ctx, endpoint)
@@ -220,6 +224,30 @@ for _, record := range records {
 
 // After all clients have re-subscribed, remove old keys
 rotating.ClearPreviousKeys()
+
+// Or automatically remove only keys with no subscriptions
+result, _ := rotating.RemoveUnusedKeys(ctx, store)
+fmt.Printf("Removed %d keys, retained %d keys\n", len(result.RemovedKeys), len(result.RetainedKeys))
+```
+
+### Using RotatingKMSSigner (Google Cloud KMS)
+
+```go
+// Create a rotating KMS signer with a shared client
+rotatingKMS, _ := keys.NewRotatingKMSSigner(ctx, "projects/my-project/locations/global/keyRings/webpush/cryptoKeys/vapid/cryptoKeyVersions/1")
+defer rotatingKMS.Close()
+
+// Create web push client
+client := webpush.NewClient(rotatingKMS, "mailto:admin@example.com")
+
+// When rotating, add a new KMS key version
+rotatingKMS.Rotate(ctx, "projects/my-project/locations/global/keyRings/webpush/cryptoKeys/vapid/cryptoKeyVersions/2")
+
+// Or add previous keys that have existing subscriptions
+rotatingKMS.AddPreviousKey(ctx, "projects/.../cryptoKeyVersions/1")
+
+// All the same operations work as RotatingSigner
+result, _ := rotatingKMS.RemoveUnusedKeys(ctx, store)
 ```
 
 ### RotatingSigner API
@@ -229,7 +257,10 @@ rotating.ClearPreviousKeys()
 rotating := keys.NewRotatingSigner(currentKey)
 rotating.Rotate(newKey)                    // Add new key, move current to previous
 rotating.RemoveOldestKey()                 // Remove the oldest previous key
+rotating.RemoveKey(pubKey)                 // Remove a specific key by public key
+rotating.RemoveKeyBase64(b64Key)           // Remove a specific key by base64 public key
 rotating.ClearPreviousKeys()               // Remove all previous keys
+rotating.RemoveUnusedKeys(ctx, store)      // Remove keys with no subscriptions
 
 // Query keys
 rotating.PublicKey()                       // Current key bytes
@@ -251,6 +282,20 @@ signer := rotating.GetSignerForKey(pubKey)
 signer := rotating.GetSignerForKeyBase64(b64Key)
 ```
 
+### RotatingKMSSigner API (additional methods)
+
+```go
+// Create
+rotatingKMS, err := keys.NewRotatingKMSSigner(ctx, keyVersionName)
+defer rotatingKMS.Close()
+
+// KMS-specific operations
+rotatingKMS.Rotate(ctx, newKeyVersionName)           // Rotate to new KMS key version
+rotatingKMS.AddPreviousKey(ctx, oldKeyVersionName)   // Add existing key to previous list
+rotatingKMS.SignWithKey(ctx, pubKey, data)           // Sign with specific key
+rotatingKMS.SignWithKeyBase64(ctx, b64Key, data)     // Sign with specific key (base64)
+```
+
 ## Custom Implementations
 
 ### Custom Storage
@@ -264,6 +309,7 @@ type Storage interface {
     GetByEndpoint(ctx context.Context, endpoint string) (*Record, error)
     GetByUserID(ctx context.Context, userID string) ([]*Record, error)
     GetByVAPIDKey(ctx context.Context, vapidKey string) ([]*Record, error)
+    CountByVAPIDKey(ctx context.Context, vapidKey string) (int, error)
     Delete(ctx context.Context, id string) error
     DeleteByEndpoint(ctx context.Context, endpoint string) error
     List(ctx context.Context, limit, offset int) ([]*Record, error)

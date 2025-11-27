@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -140,6 +141,34 @@ func (r *RotatingSigner) ClearPreviousKeys() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.previous = nil
+}
+
+// RemoveKey removes a specific key by its public key from the previous keys list.
+// Returns an error if the key is the current key or if it's not found.
+func (r *RotatingSigner) RemoveKey(publicKey []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if bytes.Equal(r.current.PublicKey(), publicKey) {
+		return errors.New("cannot remove the current key")
+	}
+
+	for i, signer := range r.previous {
+		if bytes.Equal(signer.PublicKey(), publicKey) {
+			r.previous = append(r.previous[:i], r.previous[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("key not found")
+}
+
+// RemoveKeyBase64 removes a specific key by its base64-encoded public key.
+func (r *RotatingSigner) RemoveKeyBase64(publicKeyB64 string) error {
+	decoded, err := base64.RawURLEncoding.DecodeString(publicKeyB64)
+	if err != nil {
+		return fmt.Errorf("decoding public key: %w", err)
+	}
+	return r.RemoveKey(decoded)
 }
 
 // KeyCount returns the total number of keys (current + previous).

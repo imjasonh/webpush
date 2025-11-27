@@ -42,6 +42,10 @@ type Storage interface {
 	// to be re-subscribed with the new key.
 	GetByVAPIDKey(ctx context.Context, vapidKey string) ([]*Record, error)
 
+	// CountByVAPIDKey returns the number of subscriptions for a specific VAPID key.
+	// This is useful for determining if a key can be safely removed during rotation.
+	CountByVAPIDKey(ctx context.Context, vapidKey string) (int, error)
+
 	// Delete removes a subscription by ID.
 	Delete(ctx context.Context, id string) error
 

@@ -354,4 +354,31 @@ func testVAPIDKey(t *testing.T, s Storage) {
 	if got2.UserID != "user-updated" {
 		t.Errorf("Get() after update UserID = %q, want %q", got2.UserID, "user-updated")
 	}
+
+	// Test CountByVAPIDKey for key1
+	count, err := s.CountByVAPIDKey(ctx, "key1-base64")
+	if err != nil {
+		t.Fatalf("CountByVAPIDKey(key1) error = %v", err)
+	}
+	if count != 2 {
+		t.Errorf("CountByVAPIDKey(key1) = %d, want 2", count)
+	}
+
+	// Test CountByVAPIDKey for key2
+	count, err = s.CountByVAPIDKey(ctx, "key2-base64")
+	if err != nil {
+		t.Fatalf("CountByVAPIDKey(key2) error = %v", err)
+	}
+	if count != 1 {
+		t.Errorf("CountByVAPIDKey(key2) = %d, want 1", count)
+	}
+
+	// Test CountByVAPIDKey for non-existent key
+	count, err = s.CountByVAPIDKey(ctx, "unknown-key")
+	if err != nil {
+		t.Fatalf("CountByVAPIDKey(unknown) error = %v", err)
+	}
+	if count != 0 {
+		t.Errorf("CountByVAPIDKey(unknown) = %d, want 0", count)
+	}
 }

@@ -125,6 +125,18 @@ func (s *SQLite) GetByVAPIDKey(ctx context.Context, vapidKey string) ([]*Record,
 	return scanRecords(rows)
 }
 
+// CountByVAPIDKey returns the number of subscriptions for a specific VAPID key.
+func (s *SQLite) CountByVAPIDKey(ctx context.Context, vapidKey string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM subscriptions WHERE vapid_key = ?
+	`, vapidKey).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting subscriptions: %w", err)
+	}
+	return count, nil
+}
+
 // Delete removes a subscription by ID.
 func (s *SQLite) Delete(ctx context.Context, id string) error {
 	result, err := s.db.ExecContext(ctx, "DELETE FROM subscriptions WHERE id = ?", id)

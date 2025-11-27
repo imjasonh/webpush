@@ -108,6 +108,20 @@ func (m *Memory) GetByVAPIDKey(_ context.Context, vapidKey string) ([]*Record, e
 	return results, nil
 }
 
+// CountByVAPIDKey returns the number of subscriptions for a specific VAPID key.
+func (m *Memory) CountByVAPIDKey(_ context.Context, vapidKey string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	count := 0
+	for _, record := range m.records {
+		if record.VAPIDKey == vapidKey {
+			count++
+		}
+	}
+	return count, nil
+}
+
 // Delete removes a subscription by ID.
 func (m *Memory) Delete(_ context.Context, id string) error {
 	m.mu.Lock()
