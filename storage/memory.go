@@ -42,6 +42,7 @@ func (m *Memory) Save(_ context.Context, record *Record) error {
 		UserID:    record.UserID,
 		CreatedAt: record.CreatedAt,
 		UpdatedAt: record.UpdatedAt,
+		VAPIDKey:  record.VAPIDKey,
 		Subscription: &webpush.Subscription{
 			Endpoint: record.Subscription.Endpoint,
 			Keys: webpush.Keys{
@@ -91,6 +92,34 @@ func (m *Memory) GetByUserID(_ context.Context, userID string) ([]*Record, error
 		}
 	}
 	return results, nil
+}
+
+// GetByVAPIDKey retrieves all subscriptions for a specific VAPID key.
+func (m *Memory) GetByVAPIDKey(_ context.Context, vapidKey string) ([]*Record, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var results []*Record
+	for _, record := range m.records {
+		if record.VAPIDKey == vapidKey {
+			results = append(results, copyRecord(record))
+		}
+	}
+	return results, nil
+}
+
+// CountByVAPIDKey returns the number of subscriptions for a specific VAPID key.
+func (m *Memory) CountByVAPIDKey(_ context.Context, vapidKey string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	count := 0
+	for _, record := range m.records {
+		if record.VAPIDKey == vapidKey {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // Delete removes a subscription by ID.
@@ -157,6 +186,7 @@ func copyRecord(r *Record) *Record {
 		UserID:    r.UserID,
 		CreatedAt: r.CreatedAt,
 		UpdatedAt: r.UpdatedAt,
+		VAPIDKey:  r.VAPIDKey,
 		Subscription: &webpush.Subscription{
 			Endpoint: r.Subscription.Endpoint,
 			Keys: webpush.Keys{

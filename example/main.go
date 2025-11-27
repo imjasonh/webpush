@@ -10,8 +10,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -173,8 +175,15 @@ func isGone(err error) bool {
 
 func handleVAPIDPublicKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	publicKeyB64 := base64.RawURLEncoding.EncodeToString(signer.PublicKey())
+	// Use SHA-256 hash of the public key for a collision-resistant key ID
+	hash := sha256.Sum256(signer.PublicKey())
+	keyId := hex.EncodeToString(hash[:])[:16]
 	json.NewEncoder(w).Encode(map[string]string{
-		"publicKey": base64.RawURLEncoding.EncodeToString(signer.PublicKey()),
+		"publicKey": publicKeyB64,
+		// Include a key ID that clients can use to detect key rotation
+		// When this changes, clients know they need to resubscribe
+		"keyId": keyId,
 	})
 }
 

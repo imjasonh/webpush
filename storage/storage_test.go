@@ -248,3 +248,137 @@ func TestSQLite_NotFound(t *testing.T) {
 		t.Errorf("DeleteByEndpoint() error = %v, want ErrNotFound", err)
 	}
 }
+
+func TestMemory_VAPIDKey(t *testing.T) {
+	testVAPIDKey(t, NewMemory())
+}
+
+func TestSQLite_VAPIDKey(t *testing.T) {
+	s, err := NewSQLite(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	defer s.Close()
+
+	testVAPIDKey(t, s)
+}
+
+func testVAPIDKey(t *testing.T, s Storage) {
+	ctx := context.Background()
+
+	// Create subscriptions with different VAPID keys
+	records := []*Record{
+		{
+			ID:       "sub-1",
+			UserID:   "user-1",
+			VAPIDKey: "key1-base64",
+			Subscription: &webpush.Subscription{
+				Endpoint: "https://push.example.com/1",
+				Keys:     webpush.Keys{P256dh: "p256dh-1", Auth: "auth-1"},
+			},
+		},
+		{
+			ID:       "sub-2",
+			UserID:   "user-1",
+			VAPIDKey: "key1-base64",
+			Subscription: &webpush.Subscription{
+				Endpoint: "https://push.example.com/2",
+				Keys:     webpush.Keys{P256dh: "p256dh-2", Auth: "auth-2"},
+			},
+		},
+		{
+			ID:       "sub-3",
+			UserID:   "user-2",
+			VAPIDKey: "key2-base64",
+			Subscription: &webpush.Subscription{
+				Endpoint: "https://push.example.com/3",
+				Keys:     webpush.Keys{P256dh: "p256dh-3", Auth: "auth-3"},
+			},
+		},
+	}
+
+	for _, record := range records {
+		if err := s.Save(ctx, record); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+	}
+
+	// Test GetByVAPIDKey for key1
+	key1Records, err := s.GetByVAPIDKey(ctx, "key1-base64")
+	if err != nil {
+		t.Fatalf("GetByVAPIDKey(key1) error = %v", err)
+	}
+	if len(key1Records) != 2 {
+		t.Errorf("GetByVAPIDKey(key1) count = %d, want 2", len(key1Records))
+	}
+
+	// Test GetByVAPIDKey for key2
+	key2Records, err := s.GetByVAPIDKey(ctx, "key2-base64")
+	if err != nil {
+		t.Fatalf("GetByVAPIDKey(key2) error = %v", err)
+	}
+	if len(key2Records) != 1 {
+		t.Errorf("GetByVAPIDKey(key2) count = %d, want 1", len(key2Records))
+	}
+
+	// Test GetByVAPIDKey for non-existent key
+	unknownRecords, err := s.GetByVAPIDKey(ctx, "unknown-key")
+	if err != nil {
+		t.Fatalf("GetByVAPIDKey(unknown) error = %v", err)
+	}
+	if len(unknownRecords) != 0 {
+		t.Errorf("GetByVAPIDKey(unknown) count = %d, want 0", len(unknownRecords))
+	}
+
+	// Test that VAPIDKey is preserved on retrieval
+	got, err := s.Get(ctx, "sub-1")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.VAPIDKey != "key1-base64" {
+		t.Errorf("Get().VAPIDKey = %q, want %q", got.VAPIDKey, "key1-base64")
+	}
+
+	// Test update preserves VAPIDKey
+	got.UserID = "user-updated"
+	if err := s.Save(ctx, got); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got2, err := s.Get(ctx, "sub-1")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got2.VAPIDKey != "key1-base64" {
+		t.Errorf("Get() after update VAPIDKey = %q, want %q", got2.VAPIDKey, "key1-base64")
+	}
+	if got2.UserID != "user-updated" {
+		t.Errorf("Get() after update UserID = %q, want %q", got2.UserID, "user-updated")
+	}
+
+	// Test CountByVAPIDKey for key1
+	count, err := s.CountByVAPIDKey(ctx, "key1-base64")
+	if err != nil {
+		t.Fatalf("CountByVAPIDKey(key1) error = %v", err)
+	}
+	if count != 2 {
+		t.Errorf("CountByVAPIDKey(key1) = %d, want 2", count)
+	}
+
+	// Test CountByVAPIDKey for key2
+	count, err = s.CountByVAPIDKey(ctx, "key2-base64")
+	if err != nil {
+		t.Fatalf("CountByVAPIDKey(key2) error = %v", err)
+	}
+	if count != 1 {
+		t.Errorf("CountByVAPIDKey(key2) = %d, want 1", count)
+	}
+
+	// Test CountByVAPIDKey for non-existent key
+	count, err = s.CountByVAPIDKey(ctx, "unknown-key")
+	if err != nil {
+		t.Fatalf("CountByVAPIDKey(unknown) error = %v", err)
+	}
+	if count != 0 {
+		t.Errorf("CountByVAPIDKey(unknown) = %d, want 0", count)
+	}
+}

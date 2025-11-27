@@ -9,9 +9,11 @@ A Go library for sending [Web Push API](https://developer.mozilla.org/en-US/docs
 - Pluggable VAPID key providers:
   - File-based (PEM or base64 encoded)
   - Google Cloud KMS
+  - Rotating key manager for key rotation
 - Pluggable subscription storage:
   - In-memory (for testing/development)
   - SQLite
+- Key rotation support with subscription tracking
 - Easy integration with JavaScript Push API clients
 
 ## Installation
@@ -138,6 +140,12 @@ signer, err := keys.NewKMSSigner(ctx, "projects/.../cryptoKeyVersions/1")
 // Generate new keys
 signer, err := keys.GenerateKey("path/to/save.pem")
 privateB64, publicB64, err := keys.GenerateKeyPair()
+
+// Rotating signer for key rotation (file-based or any Signer)
+rotating := keys.NewRotatingSigner(currentSigner)
+
+// Rotating KMS signer for key rotation (KMS-backed)
+rotatingKMS, err := keys.NewRotatingKMSSigner(ctx, "projects/.../cryptoKeyVersions/1")
 ```
 
 ### Storage
@@ -154,9 +162,138 @@ store.Save(ctx, record)
 store.Get(ctx, id)
 store.GetByEndpoint(ctx, endpoint)
 store.GetByUserID(ctx, userID)
+store.GetByVAPIDKey(ctx, vapidKeyB64)   // Get subscriptions for a specific VAPID key
+store.CountByVAPIDKey(ctx, vapidKeyB64) // Count subscriptions for a specific VAPID key
 store.List(ctx, limit, offset)
 store.Delete(ctx, id)
 store.DeleteByEndpoint(ctx, endpoint)
+```
+
+## Key Rotation
+
+VAPID keys should be rotated periodically for security. When rotating keys, existing browser subscriptions become invalid because they are tied to the VAPID public key (applicationServerKey). The `RotatingSigner` helps manage this transition.
+
+### How Key Rotation Works
+
+1. Browser subscriptions are created using a specific VAPID public key
+2. When the VAPID key changes, push services reject notifications with the old key
+3. Clients must re-subscribe with the new applicationServerKey
+
+### Using RotatingSigner
+
+```go
+// Create a rotating signer with the current key
+currentKey, _ := keys.NewFileSigner("current-key.pem")
+rotating := keys.NewRotatingSigner(currentKey)
+
+// Create web push client
+client := webpush.NewClient(rotating, "mailto:admin@example.com")
+
+// When storing new subscriptions, track which key was used
+record := &storage.Record{
+    ID:           uuid.New().String(),
+    Subscription: sub,
+    VAPIDKey:     rotating.PublicKeyBase64(),  // Track the key used
+}
+store.Save(ctx, record)
+
+// When it's time to rotate (e.g., annually):
+newKey, _ := keys.GenerateKey("new-key.pem")
+rotating.Rotate(newKey)
+
+// Find subscriptions that need re-subscription
+oldKeyB64 := rotating.PreviousKeysBase64()[0]
+oldSubscriptions, _ := store.GetByVAPIDKey(ctx, oldKeyB64)
+// Notify users to re-subscribe, or delete old subscriptions
+
+// Send notifications - each subscription uses the correct key
+records, _ := store.List(ctx, 100, 0)
+for _, record := range records {
+    if rotating.IsCurrentKeyBase64(record.VAPIDKey) {
+        // Can send with current client
+        client.Send(ctx, record.Subscription, payload, nil)
+    } else {
+        // Need to use the old key's signer
+        oldSigner := rotating.GetSignerForKeyBase64(record.VAPIDKey)
+        if oldSigner != nil {
+            oldClient := webpush.NewClient(oldSigner, "mailto:admin@example.com")
+            oldClient.Send(ctx, record.Subscription, payload, nil)
+        }
+    }
+}
+
+// After all clients have re-subscribed, remove old keys
+rotating.ClearPreviousKeys()
+
+// Or automatically remove only keys with no subscriptions
+result, _ := rotating.RemoveUnusedKeys(ctx, store)
+fmt.Printf("Removed %d keys, retained %d keys\n", len(result.RemovedKeys), len(result.RetainedKeys))
+```
+
+### Using RotatingKMSSigner (Google Cloud KMS)
+
+```go
+// Create a rotating KMS signer with a shared client
+rotatingKMS, _ := keys.NewRotatingKMSSigner(ctx, "projects/my-project/locations/global/keyRings/webpush/cryptoKeys/vapid/cryptoKeyVersions/1")
+defer rotatingKMS.Close()
+
+// Create web push client
+client := webpush.NewClient(rotatingKMS, "mailto:admin@example.com")
+
+// When rotating, add a new KMS key version
+rotatingKMS.Rotate(ctx, "projects/my-project/locations/global/keyRings/webpush/cryptoKeys/vapid/cryptoKeyVersions/2")
+
+// Or add previous keys that have existing subscriptions
+rotatingKMS.AddPreviousKey(ctx, "projects/.../cryptoKeyVersions/1")
+
+// All the same operations work as RotatingSigner
+result, _ := rotatingKMS.RemoveUnusedKeys(ctx, store)
+```
+
+### RotatingSigner API
+
+```go
+// Create and manage
+rotating := keys.NewRotatingSigner(currentKey)
+rotating.Rotate(newKey)                    // Add new key, move current to previous
+rotating.RemoveOldestKey()                 // Remove the oldest previous key
+rotating.RemoveKey(pubKey)                 // Remove a specific key by public key
+rotating.RemoveKeyBase64(b64Key)           // Remove a specific key by base64 public key
+rotating.ClearPreviousKeys()               // Remove all previous keys
+rotating.RemoveUnusedKeys(ctx, store)      // Remove keys with no subscriptions
+
+// Query keys
+rotating.PublicKey()                       // Current key bytes
+rotating.PublicKeyBase64()                 // Current key as base64
+rotating.PreviousKeys()                    // Previous key bytes
+rotating.PreviousKeysBase64()              // Previous keys as base64
+rotating.AllKeys()                         // All keys (current first)
+rotating.AllKeysBase64()                   // All keys as base64
+rotating.KeyCount()                        // Total number of keys
+
+// Check keys
+rotating.IsCurrentKey(pubKey)              // Check if pubKey is current
+rotating.IsCurrentKeyBase64(b64Key)        // Check if base64 key is current  
+rotating.IsKnownKey(pubKey)                // Check if pubKey is any known key
+rotating.IsKnownKeyBase64(b64Key)          // Check if base64 key is known
+
+// Get signer for specific key (for sending to old subscriptions)
+signer := rotating.GetSignerForKey(pubKey)
+signer := rotating.GetSignerForKeyBase64(b64Key)
+```
+
+### RotatingKMSSigner API (additional methods)
+
+```go
+// Create
+rotatingKMS, err := keys.NewRotatingKMSSigner(ctx, keyVersionName)
+defer rotatingKMS.Close()
+
+// KMS-specific operations
+rotatingKMS.Rotate(ctx, newKeyVersionName)           // Rotate to new KMS key version
+rotatingKMS.AddPreviousKey(ctx, oldKeyVersionName)   // Add existing key to previous list
+rotatingKMS.SignWithKey(ctx, pubKey, data)           // Sign with specific key
+rotatingKMS.SignWithKeyBase64(ctx, b64Key, data)     // Sign with specific key (base64)
 ```
 
 ## Custom Implementations
@@ -171,10 +308,25 @@ type Storage interface {
     Get(ctx context.Context, id string) (*Record, error)
     GetByEndpoint(ctx context.Context, endpoint string) (*Record, error)
     GetByUserID(ctx context.Context, userID string) ([]*Record, error)
+    GetByVAPIDKey(ctx context.Context, vapidKey string) ([]*Record, error)
+    CountByVAPIDKey(ctx context.Context, vapidKey string) (int, error)
     Delete(ctx context.Context, id string) error
     DeleteByEndpoint(ctx context.Context, endpoint string) error
     List(ctx context.Context, limit, offset int) ([]*Record, error)
     Close() error
+}
+```
+
+The `Record` struct includes a `VAPIDKey` field to track which VAPID key was used when the subscription was created:
+
+```go
+type Record struct {
+    ID           string
+    UserID       string
+    Subscription *webpush.Subscription
+    CreatedAt    time.Time
+    UpdatedAt    time.Time
+    VAPIDKey     string  // Base64-encoded VAPID public key used for this subscription
 }
 ```
 
